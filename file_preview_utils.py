@@ -1,11 +1,14 @@
+import io
 import os
 import tempfile
 import time
+import traceback
 import uuid
 
+import numpy as np
 from docx2pdf import convert
-from PIL import Image
-from pdf2image import convert_from_path
+from PIL import Image, ImageTk
+import fitz
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
@@ -14,7 +17,19 @@ from openpyxl import load_workbook
 
 
 def convert_pdf_to_image(pdf_path):
-    return convert_from_path(pdf_path, poppler_path=r"D:\tools\poppler-0.68.0\bin")[0]
+    # return convert_from_path(pdf_path, poppler_path=r"D:\tools\poppler-0.68.0\bin")[0]
+    # tmp_png = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()) + "_" + str(int(time.time())) + ".png")
+    try:
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            pix = page.get_pixmap()
+            img_bytes = pix.getPNGData()  # 获取PNG格式数据
+            return Image.open(io.BytesIO(img_bytes))
+    except:
+        traceback.print_exc()
+        return None
+    # finally:
+    #     os.remove(tmp_png)
 
 
 #
