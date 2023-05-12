@@ -67,10 +67,12 @@ class Application(tk.Frame):
         directory = self.directory_var.get()
         if directory:
             self.previews = {}
+            self.clear_preview()
             self.last_select_item = None
             self.preview_label.configure(text=None, image=None)
             file_lists = dedup_files_in_directory(directory)
             self.treeview.delete(*self.treeview.get_children())
+            self.treeview.selection_remove(self.treeview.focus())
             for files in file_lists:
                 parent_node = self.treeview.insert("", tk.END,
                                                    text=os.path.relpath(files[0], directory),
@@ -81,7 +83,7 @@ class Application(tk.Frame):
                                          values=get_file_info(file))
 
     def show_preview(self, event):
-        if not self.treeview.get_children():
+        if not self.treeview.selection():
             return
         selected_item = self.treeview.parent(self.treeview.selection()[0])
         if not selected_item:
@@ -97,12 +99,20 @@ class Application(tk.Frame):
             preview_content = self.previews[selected_item]
         if isinstance(preview_content, str):
             self.preview_label.configure(text=preview_content, image=None)
+            self.preview_label.text = preview_content
         elif preview_content:
             # isinstance(preview_content, Image):
             image = preview_content.resize((100, 100))
             photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=photo, text=None)
+            self.preview_label.image = photo
+        else:
+            self.clear_preview()
 
+    def clear_preview(self):
+        self.preview_label.configure(image=None, text=None)
+        self.preview_label.image = None
+        self.preview_label.text = None
 
 if __name__ == "__main__":
     root = tk.Tk()
