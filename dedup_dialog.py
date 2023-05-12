@@ -81,6 +81,8 @@ class Application(tk.Frame):
                                          values=get_file_info(file))
 
     def show_preview(self, event):
+        if not self.treeview.get_children():
+            return
         selected_item = self.treeview.parent(self.treeview.selection()[0])
         if not selected_item:
             selected_item = self.treeview.selection()[0]
