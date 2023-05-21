@@ -1,69 +1,116 @@
+import asyncio
 import hashlib
+import logging
 import os
 import sys
+import traceback
 from datetime import datetime
 
-
-def dedup_files_by_size(directory: str) -> dict:
-    files_info = {}
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            path = os.path.join(root, file)
-            size = os.path.getsize(path)
-            if size not in files_info:
-                files_info[size] = []
-            files_info[size].append(path)
-    return {x: files_info[x] for x in files_info if len(files_info[x]) > 1}
+import aiofiles as aiofiles
 
 
-def get_chunk_md5(file_path: str, chunk_size=65536):
-    with open(file_path, "rb") as fp:
+class dedup_process_helper_interface(object):
+    async def info(self, message):
+        pass
+
+
+class dedup_process_helper(dedup_process_helper_interface):
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
+    async def info(self, message):
+        self.logger.info(message)
+
+
+class dedup_utils(object):
+    def __init__(self, directory: str, helper: dedup_process_helper_interface = None):
+        self.directory = directory
+        self.helper = helper
+
+    async def set_info(self, message):
+        if self.helper:
+            await self.helper.info(message)
+
+    async def dedup_files_by_size(self) -> dict:
+        files_info = {}
+        for root, dirs, files in os.walk(self.directory):
+            for file in files:
+                path = os.path.join(root, file)
+                size = os.path.getsize(path)
+                if size not in files_info:
+                    files_info[size] = []
+                files_info[size].append(path)
+        return {x: files_info[x] for x in files_info if len(files_info[x]) > 1}
+
+    async def get_file_md5_by_chunk(self, file_path: str, chunk_size=65536):
+        async with aiofiles.open(file_path, "rb") as fp:
+            while True:
+                chunk = await fp.read(chunk_size)
+                if not chunk:
+                    break
+                await self.set_info(file_path)
+                yield hashlib.md5(chunk).hexdigest()
+
+    async def get_chunk_md5(self, file_path, md5_iter, dedup_files_by_chunk_md5: dict, lock):
+        md5 = await next(md5_iter)
+        async with lock:
+            if md5 not in dedup_files_by_chunk_md5:
+                dedup_files_by_chunk_md5[md5] = []
+            dedup_files_by_chunk_md5[md5].append((file_path, md5_iter))
+
+    async def dedup_file_list_by_md5(self, file_list: list) -> list[list]:
+        dedup_files_list_tmp = [[(x, self.get_file_md5_by_chunk(x)) for x in file_list]]
+        lock = asyncio.Lock()
         while True:
-            chunk = fp.read(chunk_size)
-            if not chunk:
+            try:
+                done = True
+                new_files_list = []
+                for files in dedup_files_list_tmp:
+                    if len(files) > 1:
+                        done = False
+                        new_md5_files = {}
+                        tasks = []
+                        for file, md5_iter in files:
+                            tasks.append(asyncio.create_task(self.get_chunk_md5(file, md5_iter, new_md5_files, lock)))
+                        await asyncio.gather(*tasks)
+                        new_files_list.extend([new_md5_files[x] for x in new_md5_files if len(new_md5_files[x]) > 1])
+                dedup_files_list_tmp = new_files_list
+                if done:
+                    break
+            except TypeError as e:
                 break
-            yield hashlib.md5(chunk).hexdigest()
-
-
-def dedup_file_list_by_md5(file_list: list) -> list[list]:
-    dedup_files_list_tmp = [[(x, get_chunk_md5(x)) for x in file_list]]
-    while True:
-        try:
-            done = True
-            new_files_list = []
-            for files in dedup_files_list_tmp:
-                if len(files) > 1:
-                    done = False
-                    new_md5_files = {}
-                    for file, md5_iter in files:
-                        md5 = next(md5_iter)
-                        if md5 not in new_md5_files:
-                            new_md5_files[md5] = []
-                        new_md5_files[md5].append((file, md5_iter))
-                    new_files_list.extend([new_md5_files[x] for x in new_md5_files if len(new_md5_files[x]) > 1])
-            dedup_files_list_tmp = new_files_list
-            if done:
+            except BaseException as e:
+                traceback.print_exc()
                 break
-        except StopIteration as e:
-            break
-    dedup_files_list = []
-    for files in dedup_files_list_tmp:
-        dedup_files_list.append([x[0] for x in files])
-    return dedup_files_list
+
+        dedup_files_list = []
+        for files in dedup_files_list_tmp:
+            dedup_files_list.append([x[0] for x in files])
+        return dedup_files_list
+
+    async def dedup_files_in_directory(self):
+        files_by_size = await self.dedup_files_by_size()
+        for size, files in files_by_size.items():
+            file_list = await self.dedup_file_list_by_md5(files)
+            for l in file_list:
+                if len(l) > 1:
+                    yield l
+
+    @staticmethod
+    def get_file_info(file_path: str) -> tuple:
+        return (
+            os.path.getsize(file_path),
+            datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
 
-def dedup_files_in_directory(directory: str):
-    files_by_size = dedup_files_by_size(directory)
-    for size, files in files_by_size.items():
-        for l in dedup_file_list_by_md5(files):
-            if len(l) > 1:
-                yield l
-
-
-def get_file_info(file_path: str) -> tuple:
-    return (os.path.getsize(file_path),
-            datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S"))
+async def main(directory: str):
+    print("Start dedup files in %s" % directory)
+    dutils = dedup_utils(directory, dedup_process_helper())
+    async for files in dutils.dedup_files_in_directory():
+        print(files)
 
 
 if __name__ == "__main__":
-    print(list(dedup_files_in_directory(sys.argv[1])))
+    logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
+    asyncio.run(main(sys.argv[1]))

@@ -5,7 +5,6 @@ import time
 import traceback
 import uuid
 
-import numpy as np
 from docx2pdf import convert
 from PIL import Image, ImageTk
 import fitz
@@ -23,7 +22,7 @@ def convert_pdf_to_image(pdf_path):
         doc = fitz.open(pdf_path)
         for page in doc:
             pix = page.get_pixmap()
-            img_bytes = pix.getPNGData()  # 获取PNG格式数据
+            img_bytes = pix.tobytes()  # 获取PNG格式数据
             return Image.open(io.BytesIO(img_bytes))
     except:
         traceback.print_exc()

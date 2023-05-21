@@ -1,10 +1,20 @@
+import asyncio
 import os
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
-from dedup_utils import dedup_files_in_directory, get_file_info
+from dedup_utils import dedup_process_helper_interface, dedup_utils
 from file_preview_utils import file_preview
 from PIL import Image, ImageTk
+
+
+class dedup_process_helper(dedup_process_helper_interface):
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def info(self, message):
+        await app.set_info(message)
 
 
 class Application(tk.Frame):
@@ -64,23 +74,29 @@ class Application(tk.Frame):
             self.directory_var.set(directory)
 
     def scan_directory(self):
+        loop = asyncio.get_running_loop()
+        loop.create_task(self.scan_directory_async())
+
+    async def scan_directory_async(self):
         directory = self.directory_var.get()
         if directory:
+            dedup_utils_instance = dedup_utils(directory, dedup_process_helper(self))
             self.previews = {}
-            self.clear_preview()
+            await self.clear_preview()
             self.last_select_item = None
-            self.preview_label.configure(text=None, image=None)
-            file_lists = dedup_files_in_directory(directory)
             self.treeview.delete(*self.treeview.get_children())
             self.treeview.selection_remove(self.treeview.focus())
-            for files in file_lists:
+            async for files in dedup_utils_instance.dedup_files_in_directory():
                 parent_node = self.treeview.insert("", tk.END,
                                                    text=os.path.relpath(files[0], directory),
-                                                   values=get_file_info(files[0]))
+                                                   values=dedup_utils.get_file_info(files[0]))
                 for file in files[1:]:
                     self.treeview.insert(parent_node, tk.END,
                                          text=os.path.relpath(file, directory),
-                                         values=get_file_info(file))
+                                         values=dedup_utils.get_file_info(file))
+
+    async def set_info(self, message: str):
+        pass
 
     def show_preview(self, event):
         if not self.treeview.selection():
@@ -102,19 +118,26 @@ class Application(tk.Frame):
             self.preview_label.text = preview_content
         elif preview_content:
             # isinstance(preview_content, Image):
-            image = preview_content.resize((100, 100))
+            width = 100
+            height = int((float(preview_content.size[1]) / float(preview_content.size[0])) * float(width))
+            image = preview_content.resize((width, height))
             photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=photo, text=None)
             self.preview_label.image = photo
         else:
             self.clear_preview()
 
-    def clear_preview(self):
+    async def clear_preview(self):
         self.preview_label.configure(image=None, text=None)
         self.preview_label.image = None
         self.preview_label.text = None
 
-if __name__ == "__main__":
+
+async def main():
     root = tk.Tk()
     app = Application(master=root)
     app.mainloop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
