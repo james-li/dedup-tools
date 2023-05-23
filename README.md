@@ -1,2 +1,2 @@
 # dedup-tools
-tools to remote duplicate files in a directory
+tools to remove duplicate files in a directory
